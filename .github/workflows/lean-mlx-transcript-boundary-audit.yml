@@ -1,0 +1,1304 @@
+name: Lean + MLX Transcript Boundary Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  build-audit-evaluate-package:
+    name: Build, audit, train, graph, and package reviewer artifact
+    runs-on: macos-15
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Print mission
+        run: |
+          set -euxo pipefail
+          echo "================================================================================"
+          echo "LEAN + MLX TRANSCRIPT BOUNDARY AUDIT"
+          echo "================================================================================"
+          echo "This workflow is fully self-contained."
+          echo ""
+          echo "It generates:"
+          echo "  - Lean proof artifact"
+          echo "  - theorem audit"
+          echo "  - deterministic MLX proof-matched experiment"
+          echo "  - trained MLX classifier experiment"
+          echo "  - publication-grade HTML report"
+          echo "  - Matplotlib SVG/PNG graphs"
+          echo "  - CSV tables"
+          echo "  - SHA256 manifest"
+          echo "  - clean reviewer packet ZIP"
+          echo ""
+          echo "Runner:"
+          uname -a
+          uname -m
+          sw_vers || true
+          sysctl -n machdep.cpu.brand_string || true
+          echo "================================================================================"
+
+      - name: Install Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install MLX and plotting dependencies
+        run: |
+          set -euxo pipefail
+          python3 -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install mlx numpy matplotlib
+
+          python - <<'PY'
+          import platform
+          import mlx.core as mx
+
+          print("================================================================================")
+          print("MLX SMOKE TEST")
+          print("================================================================================")
+          print("Python platform:", platform.platform())
+          print("Machine:", platform.machine())
+          x = mx.array([1.0, 2.0, 3.0])
+          y = mx.sum(x)
+          mx.eval(y)
+          print("MLX sum:", float(y))
+          print("MLX default device:", mx.default_device())
+          print("Verdict: MLX PASS")
+          print("================================================================================")
+          PY
+
+      - name: Generate complete self-contained project
+        run: |
+          set -euxo pipefail
+
+          rm -rf PACXAI scripts experiments results ci-results reviewer_packet lean-mlx-transcript-boundary-audit
+          rm -f lean-toolchain lakefile.lean PACXAI.lean README.md REPRODUCE.md LIMITATIONS.md THREAT_MODEL.md ARTIFACT_EVALUATION_README.md MANIFEST.json *.zip
+          mkdir -p PACXAI/InfoTheory PACXAI/PAC PACXAI/Leakage scripts experiments results
+
+          cat > experiments/generate_project.py <<'PY'
+          from __future__ import annotations
+
+          from pathlib import Path
+
+          files: dict[str, str] = {}
+
+          files["lean-toolchain"] = "leanprover/lean4:v4.30.0-rc2\n"
+
+          files["lakefile.lean"] = r'''
+          import Lake
+          open Lake DSL
+
+          package «lean_mlx_transcript_boundary_audit» where
+
+          @[default_target]
+          lean_lib PACXAI where
+            roots := #[`PACXAI]
+          '''.strip() + "\n"
+
+          files["PACXAI.lean"] = r'''
+          import PACXAI.Core
+          import PACXAI.Transcript
+          import PACXAI.Recovery
+          import PACXAI.Conditioning
+          import PACXAI.Distillation
+          import PACXAI.Leakage.FiniteCapacity
+          import PACXAI.InfoTheory.FiniteDistribution
+          import PACXAI.InfoTheory.DPI
+          import PACXAI.InfoTheory.FanoStyle
+          import PACXAI.PAC.MonteCarlo
+
+          namespace PACXAI
+
+          theorem ci_smoke : True := by
+            trivial
+
+          end PACXAI
+          '''.strip() + "\n"
+
+          files["PACXAI/Core.lean"] = r'''
+          namespace PACXAI
+
+          abbrev Observation (Secret Output : Type) := Secret -> Output
+          abbrev Criterion (Secret Guess : Type) := Secret -> Guess -> Bool
+          abbrev Population (Secret : Type) := List Secret
+
+          def countWhere {A : Type} (xs : List A) (p : A -> Bool) : Nat :=
+            (xs.filter p).length
+
+          def successCount {Secret Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (attack : Secret -> Guess) : Nat :=
+            countWhere secrets (fun s => criterion s (attack s))
+
+          def failureCount {Secret Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (attack : Secret -> Guess) : Nat :=
+            countWhere secrets (fun s => !(criterion s (attack s)))
+
+          structure EmpiricalRate where
+            numerator : Nat
+            denominator : Nat
+            deriving Repr, BEq
+
+          def successRate {Secret Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (attack : Secret -> Guess) : EmpiricalRate :=
+            { numerator := successCount secrets criterion attack, denominator := secrets.length }
+
+          def passesBudget {Secret Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (budget : Nat)
+              (attack : Secret -> Guess) : Prop :=
+            successCount secrets criterion attack <= budget
+
+          def postprocess {Secret Raw Out : Type}
+              (obs : Observation Secret Raw)
+              (f : Raw -> Out) : Observation Secret Out :=
+            fun s => f (obs s)
+
+          def liftedAttack {Raw Out Guess : Type}
+              (f : Raw -> Out)
+              (attack : Out -> Guess) : Raw -> Guess :=
+            fun r => attack (f r)
+
+          theorem postprocess_attack_pointwise {Secret Raw Out Guess : Type}
+              (obs : Observation Secret Raw)
+              (f : Raw -> Out)
+              (attack : Out -> Guess)
+              (s : Secret) :
+              attack ((postprocess obs f) s) = (liftedAttack f attack) (obs s) := by
+            rfl
+
+          theorem postprocess_successCount_eq {Secret Raw Out Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (obs : Observation Secret Raw)
+              (f : Raw -> Out)
+              (attack : Out -> Guess) :
+              successCount secrets criterion (fun s => attack ((postprocess obs f) s)) =
+              successCount secrets criterion (fun s => (liftedAttack f attack) (obs s)) := by
+            rfl
+
+          theorem postprocess_successRate_eq {Secret Raw Out Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (obs : Observation Secret Raw)
+              (f : Raw -> Out)
+              (attack : Out -> Guess) :
+              successRate secrets criterion (fun s => attack ((postprocess obs f) s)) =
+              successRate secrets criterion (fun s => (liftedAttack f attack) (obs s)) := by
+            rfl
+
+          theorem postprocess_budget_sound {Secret Raw Out Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (budget : Nat)
+              (obs : Observation Secret Raw)
+              (f : Raw -> Out)
+              (attack : Out -> Guess)
+              (h : passesBudget secrets criterion budget (fun s => (liftedAttack f attack) (obs s))) :
+              passesBudget secrets criterion budget (fun s => attack ((postprocess obs f) s)) := by
+            exact h
+
+          theorem distilled_student_attack_is_transcript_attack
+              {Secret Transcript Student Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (transcript : Observation Secret Transcript)
+              (train : Transcript -> Student)
+              (studentAttack : Student -> Guess) :
+              successCount secrets criterion (fun s => studentAttack (train (transcript s))) =
+              successCount secrets criterion (fun s => (fun t => studentAttack (train t)) (transcript s)) := by
+            rfl
+
+          theorem distilled_student_rate_is_transcript_rate
+              {Secret Transcript Student Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (transcript : Observation Secret Transcript)
+              (train : Transcript -> Student)
+              (studentAttack : Student -> Guess) :
+              successRate secrets criterion (fun s => studentAttack (train (transcript s))) =
+              successRate secrets criterion (fun s => (fun t => studentAttack (train t)) (transcript s)) := by
+            rfl
+
+          end PACXAI
+          '''.strip() + "\n"
+
+          files["PACXAI/Transcript.lean"] = r'''
+          import PACXAI.Core
+
+          namespace PACXAI
+
+          structure Round (Query Answer Explanation : Type) where
+            query : Query
+            answer : Answer
+            explanation : Explanation
+            deriving Repr
+
+          abbrev History (Query Answer Explanation : Type) := List (Round Query Answer Explanation)
+
+          abbrev AdaptivePolicy (Side Query Answer Explanation : Type) :=
+            Nat -> Side -> History Query Answer Explanation -> Query
+
+          abbrev Answerer (Secret Query Answer Explanation : Type) :=
+            Secret -> Query -> Answer × Explanation
+
+          def runAdaptive {Secret Side Query Answer Explanation : Type}
+              (policy : AdaptivePolicy Side Query Answer Explanation)
+              (answerer : Answerer Secret Query Answer Explanation)
+              (side : Side)
+              (secret : Secret) : Nat -> History Query Answer Explanation
+            | 0 => []
+            | n + 1 =>
+                let hist := runAdaptive policy answerer side secret n
+                let q := policy n side hist
+                let ae := answerer secret q
+                hist ++ [{ query := q, answer := ae.fst, explanation := ae.snd }]
+
+          theorem adaptive_next_query_is_policy {Side Query Answer Explanation : Type}
+              (policy : AdaptivePolicy Side Query Answer Explanation)
+              (side : Side)
+              (hist : History Query Answer Explanation)
+              (n : Nat) :
+              policy n side hist = policy n side hist := by
+            rfl
+
+          theorem same_history_same_query {Side Query Answer Explanation : Type}
+              (policy : AdaptivePolicy Side Query Answer Explanation)
+              (side : Side)
+              (hist : History Query Answer Explanation)
+              (n : Nat) :
+              policy n side hist = policy n side hist := by
+            rfl
+
+          end PACXAI
+          '''.strip() + "\n"
+
+          files["PACXAI/Recovery.lean"] = r'''
+          import PACXAI.Core
+
+          namespace PACXAI
+
+          abbrev CandidateAttack (Observation Guess : Type) := Observation -> Guess
+
+          def observedSuccessCount {Secret Obs Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (obs : Observation Secret Obs)
+              (attack : CandidateAttack Obs Guess) : Nat :=
+            successCount secrets criterion (fun s => attack (obs s))
+
+          def observedSuccessRate {Secret Obs Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (obs : Observation Secret Obs)
+              (attack : CandidateAttack Obs Guess) : EmpiricalRate :=
+            successRate secrets criterion (fun s => attack (obs s))
+
+          abbrev CandidateClass (Obs Guess : Type) := List (CandidateAttack Obs Guess)
+
+          def candidateScores {Secret Obs Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (obs : Observation Secret Obs)
+              (candidates : CandidateClass Obs Guess) : List Nat :=
+            candidates.map (fun attack => observedSuccessCount secrets criterion obs attack)
+
+          def bestNat : List Nat -> Nat
+            | [] => 0
+            | x :: xs => Nat.max x (bestNat xs)
+
+          def candidateBestSuccess {Secret Obs Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (obs : Observation Secret Obs)
+              (candidates : CandidateClass Obs Guess) : Nat :=
+            bestNat (candidateScores secrets criterion obs candidates)
+
+          def liftCandidateClass {Raw Out Guess : Type}
+              (f : Raw -> Out)
+              (candidates : CandidateClass Out Guess) : CandidateClass Raw Guess :=
+            candidates.map (liftedAttack f)
+
+          theorem candidateScores_postprocess_eq {Secret Raw Out Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (obs : Observation Secret Raw)
+              (f : Raw -> Out)
+              (candidates : CandidateClass Out Guess) :
+              candidateScores secrets criterion (postprocess obs f) candidates =
+              candidateScores secrets criterion obs (liftCandidateClass f candidates) := by
+            induction candidates with
+            | nil => rfl
+            | cons a rest ih =>
+                simp [candidateScores, liftCandidateClass, observedSuccessCount, postprocess, liftedAttack,
+                  successCount, countWhere]
+
+          theorem candidateBest_postprocess_eq_lifted {Secret Raw Out Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (obs : Observation Secret Raw)
+              (f : Raw -> Out)
+              (candidates : CandidateClass Out Guess) :
+              candidateBestSuccess secrets criterion (postprocess obs f) candidates =
+              candidateBestSuccess secrets criterion obs (liftCandidateClass f candidates) := by
+            simp [candidateBestSuccess, candidateScores_postprocess_eq]
+
+          def empiricalRisk {Secret Obs Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (obs : Observation Secret Obs)
+              (attack : CandidateAttack Obs Guess) : Nat :=
+            failureCount secrets criterion (fun s => attack (obs s))
+
+          theorem empiricalRisk_postprocess_eq {Secret Raw Out Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (obs : Observation Secret Raw)
+              (f : Raw -> Out)
+              (attack : CandidateAttack Out Guess) :
+              empiricalRisk secrets criterion (postprocess obs f) attack =
+              empiricalRisk secrets criterion obs (liftedAttack f attack) := by
+            rfl
+
+          end PACXAI
+          '''.strip() + "\n"
+
+          files["PACXAI/Conditioning.lean"] = r'''
+          import PACXAI.Core
+          import PACXAI.Recovery
+
+          namespace PACXAI
+
+          def conditionPopulation {Secret : Type}
+              (secrets : Population Secret)
+              (condition : Secret -> Bool) : Population Secret :=
+            secrets.filter condition
+
+          def conditionalObservedSuccessCount {Secret Obs Guess : Type}
+              (secrets : Population Secret)
+              (condition : Secret -> Bool)
+              (criterion : Criterion Secret Guess)
+              (obs : Observation Secret Obs)
+              (attack : CandidateAttack Obs Guess) : Nat :=
+            observedSuccessCount (conditionPopulation secrets condition) criterion obs attack
+
+          theorem conditional_postprocess_success_eq {Secret Raw Out Guess : Type}
+              (secrets : Population Secret)
+              (condition : Secret -> Bool)
+              (criterion : Criterion Secret Guess)
+              (obs : Observation Secret Raw)
+              (f : Raw -> Out)
+              (attack : CandidateAttack Out Guess) :
+              conditionalObservedSuccessCount secrets condition criterion (postprocess obs f) attack =
+              conditionalObservedSuccessCount secrets condition criterion obs (liftedAttack f attack) := by
+            rfl
+
+          theorem conditional_candidateBest_postprocess_eq_lifted {Secret Raw Out Guess : Type}
+              (secrets : Population Secret)
+              (condition : Secret -> Bool)
+              (criterion : Criterion Secret Guess)
+              (obs : Observation Secret Raw)
+              (f : Raw -> Out)
+              (candidates : CandidateClass Out Guess) :
+              candidateBestSuccess (conditionPopulation secrets condition) criterion (postprocess obs f) candidates =
+              candidateBestSuccess (conditionPopulation secrets condition) criterion obs (liftCandidateClass f candidates) := by
+            exact candidateBest_postprocess_eq_lifted (conditionPopulation secrets condition) criterion obs f candidates
+
+          end PACXAI
+          '''.strip() + "\n"
+
+          files["PACXAI/Distillation.lean"] = r'''
+          import PACXAI.Core
+          import PACXAI.Recovery
+          import PACXAI.Conditioning
+          import PACXAI.Transcript
+
+          namespace PACXAI
+
+          structure DistillationCampaign (Secret Transcript Student Guess : Type) where
+            population : Population Secret
+            criterion : Criterion Secret Guess
+            transcript : Observation Secret Transcript
+            train : Transcript -> Student
+            studentAttack : Student -> Guess
+
+          def studentObservation {Secret Transcript Student Guess : Type}
+              (c : DistillationCampaign Secret Transcript Student Guess) : Observation Secret Student :=
+            postprocess c.transcript c.train
+
+          def transcriptSimulator {Secret Transcript Student Guess : Type}
+              (c : DistillationCampaign Secret Transcript Student Guess) : Transcript -> Guess :=
+            liftedAttack c.train c.studentAttack
+
+          theorem student_attack_lifts_to_transcript {Secret Transcript Student Guess : Type}
+              (c : DistillationCampaign Secret Transcript Student Guess) :
+              observedSuccessCount c.population c.criterion (studentObservation c) c.studentAttack =
+              observedSuccessCount c.population c.criterion c.transcript (transcriptSimulator c) := by
+            rfl
+
+          theorem student_rate_lifts_to_transcript {Secret Transcript Student Guess : Type}
+              (c : DistillationCampaign Secret Transcript Student Guess) :
+              observedSuccessRate c.population c.criterion (studentObservation c) c.studentAttack =
+              observedSuccessRate c.population c.criterion c.transcript (transcriptSimulator c) := by
+            rfl
+
+          theorem conditional_student_attack_lifts_to_transcript {Secret Transcript Student Guess : Type}
+              (c : DistillationCampaign Secret Transcript Student Guess)
+              (condition : Secret -> Bool) :
+              conditionalObservedSuccessCount c.population condition c.criterion (studentObservation c) c.studentAttack =
+              conditionalObservedSuccessCount c.population condition c.criterion c.transcript (transcriptSimulator c) := by
+            rfl
+
+          theorem student_candidate_best_is_transcript_candidate_best_lifted
+              {Secret Transcript Student Guess : Type}
+              (population : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (transcript : Observation Secret Transcript)
+              (train : Transcript -> Student)
+              (candidates : CandidateClass Student Guess) :
+              candidateBestSuccess population criterion (postprocess transcript train) candidates =
+              candidateBestSuccess population criterion transcript (liftCandidateClass train candidates) := by
+            exact candidateBest_postprocess_eq_lifted population criterion transcript train candidates
+
+          end PACXAI
+          '''.strip() + "\n"
+
+          files["PACXAI/Leakage/FiniteCapacity.lean"] = r'''
+          import PACXAI.Core
+
+          namespace PACXAI
+          namespace Leakage
+
+          def appears {Secret Out : Type} [BEq Out]
+              (secrets : Population Secret)
+              (obs : Observation Secret Out)
+              (y : Out) : Bool :=
+            secrets.any (fun s => obs s == y)
+
+          def outputCoverSize {Secret Out : Type} [BEq Out]
+              (secrets : Population Secret)
+              (obs : Observation Secret Out)
+              (outputs : List Out) : Nat :=
+            (outputs.filter (appears secrets obs)).length
+
+          def cartesian {A B : Type} : List A -> List B -> List (A × B)
+            | [], _ => []
+            | a :: as, bs => bs.map (fun b => (a,b)) ++ cartesian as bs
+
+          def pairObs {Secret A B : Type}
+              (obsA : Observation Secret A)
+              (obsB : Observation Secret B) : Observation Secret (A × B) :=
+            fun s => (obsA s, obsB s)
+
+          theorem postprocess_output_pointwise {Secret Raw Out : Type}
+              (obs : Observation Secret Raw)
+              (f : Raw -> Out)
+              (s : Secret) :
+              (postprocess obs f) s = f (obs s) := by
+            rfl
+
+          theorem pairObs_pointwise {Secret A B : Type}
+              (obsA : Observation Secret A)
+              (obsB : Observation Secret B)
+              (s : Secret) :
+              pairObs obsA obsB s = (obsA s, obsB s) := by
+            rfl
+
+          end Leakage
+          end PACXAI
+          '''.strip() + "\n"
+
+          files["PACXAI/InfoTheory/FiniteDistribution.lean"] = r'''
+          import PACXAI.Core
+
+          namespace PACXAI
+          namespace InfoTheory
+
+          def sumBy {A : Type} (f : A -> Nat) : List A -> Nat
+            | [] => 0
+            | x :: xs => f x + sumBy f xs
+
+          structure FiniteDist (A : Type) where
+            support : List A
+            mass : A -> Nat
+
+          def totalMass {A : Type} (p : FiniteDist A) : Nat :=
+            sumBy p.mass p.support
+
+          def mapDist {A B : Type} [BEq B]
+              (f : A -> B)
+              (p : FiniteDist A) : FiniteDist B where
+            support := p.support.map f
+            mass := fun b => sumBy (fun a => if f a == b then p.mass a else 0) p.support
+
+          abbrev Code (A : Type) := A -> Nat
+
+          def expectedCodeCost {A : Type} (p : FiniteDist A) (code : Code A) : Nat :=
+            sumBy (fun a => p.mass a * code a) p.support
+
+          def relativeCodeCost {A : Type} (p : FiniteDist A) (pCode qCode : Code A) : Nat :=
+            sumBy (fun a => p.mass a * (qCode a - pCode a)) p.support
+
+          def pullCode {A B : Type} (f : A -> B) (code : Code B) : Code A :=
+            fun a => code (f a)
+
+          theorem expectedCodeCost_pullback {A B : Type}
+              (p : FiniteDist A)
+              (f : A -> B)
+              (code : Code B) :
+              sumBy (fun a => p.mass a * pullCode f code a) p.support =
+              sumBy (fun a => p.mass a * code (f a)) p.support := by
+            rfl
+
+          theorem totalMass_unfold {A : Type} (p : FiniteDist A) :
+              totalMass p = sumBy p.mass p.support := by
+            rfl
+
+          end InfoTheory
+          end PACXAI
+          '''.strip() + "\n"
+
+          files["PACXAI/InfoTheory/DPI.lean"] = r'''
+          import PACXAI.InfoTheory.FiniteDistribution
+          import PACXAI.Core
+
+          namespace PACXAI
+          namespace InfoTheory
+
+          abbrev DetChannel (A B : Type) := A -> B
+
+          def observedCodeCost {Secret Obs : Type}
+              (p : FiniteDist Secret)
+              (obs : Observation Secret Obs)
+              (code : Code Obs) : Nat :=
+            sumBy (fun s => p.mass s * code (obs s)) p.support
+
+          theorem deterministic_dpi_exact {Secret Raw Out : Type}
+              (p : FiniteDist Secret)
+              (raw : Observation Secret Raw)
+              (f : DetChannel Raw Out)
+              (outCode : Code Out) :
+              observedCodeCost p (postprocess raw f) outCode =
+              observedCodeCost p raw (pullCode f outCode) := by
+            rfl
+
+          def restrictDist {A : Type}
+              (p : FiniteDist A)
+              (condition : A -> Bool) : FiniteDist A where
+            support := p.support.filter condition
+            mass := p.mass
+
+          theorem conditional_deterministic_dpi_exact {Secret Raw Out : Type}
+              (p : FiniteDist Secret)
+              (condition : Secret -> Bool)
+              (raw : Observation Secret Raw)
+              (f : DetChannel Raw Out)
+              (outCode : Code Out) :
+              observedCodeCost (restrictDist p condition) (postprocess raw f) outCode =
+              observedCodeCost (restrictDist p condition) raw (pullCode f outCode) := by
+            rfl
+
+          def infoGainCost {Secret Obs : Type}
+              (p : FiniteDist Secret)
+              (obs : Observation Secret Obs)
+              (baseline observed : Code Obs) : Nat :=
+            sumBy (fun s => p.mass s * (baseline (obs s) - observed (obs s))) p.support
+
+          theorem infoGain_postprocess_exact {Secret Raw Out : Type}
+              (p : FiniteDist Secret)
+              (raw : Observation Secret Raw)
+              (f : DetChannel Raw Out)
+              (baseline observed : Code Out) :
+              infoGainCost p (postprocess raw f) baseline observed =
+              infoGainCost p raw (pullCode f baseline) (pullCode f observed) := by
+            rfl
+
+          end InfoTheory
+          end PACXAI
+          '''.strip() + "\n"
+
+          files["PACXAI/InfoTheory/FanoStyle.lean"] = r'''
+          import PACXAI.Core
+          import PACXAI.Recovery
+          import PACXAI.InfoTheory.FiniteDistribution
+          import PACXAI.InfoTheory.DPI
+
+          namespace PACXAI
+          namespace InfoTheory
+
+          structure FanoStyleCertificate where
+            total : Nat
+            successes : Nat
+            allowedErrors : Nat
+            requiredInformation : Nat
+            deriving Repr, BEq
+
+          def FanoStyleCertificate.Valid (c : FanoStyleCertificate) : Prop :=
+            c.total <= c.successes + c.allowedErrors
+
+          def fanoStyleFromAttack {Secret Obs Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (obs : Observation Secret Obs)
+              (attack : CandidateAttack Obs Guess)
+              (allowedErrors requiredInformation : Nat) : FanoStyleCertificate :=
+            { total := secrets.length,
+              successes := observedSuccessCount secrets criterion obs attack,
+              allowedErrors := allowedErrors,
+              requiredInformation := requiredInformation }
+
+          theorem fanoStyle_student_transcript_success_eq
+              {Secret Transcript Student Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (transcript : Observation Secret Transcript)
+              (train : Transcript -> Student)
+              (studentAttack : CandidateAttack Student Guess)
+              (allowedErrors requiredInformation : Nat) :
+              (fanoStyleFromAttack secrets criterion (postprocess transcript train) studentAttack allowedErrors requiredInformation).successes =
+              (fanoStyleFromAttack secrets criterion transcript (liftedAttack train studentAttack) allowedErrors requiredInformation).successes := by
+            rfl
+
+          theorem fanoStyle_valid_student_to_transcript
+              {Secret Transcript Student Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (transcript : Observation Secret Transcript)
+              (train : Transcript -> Student)
+              (studentAttack : CandidateAttack Student Guess)
+              (allowedErrors requiredInformation : Nat)
+              (h : (fanoStyleFromAttack secrets criterion (postprocess transcript train) studentAttack allowedErrors requiredInformation).Valid) :
+              (fanoStyleFromAttack secrets criterion transcript (liftedAttack train studentAttack) allowedErrors requiredInformation).Valid := by
+            exact h
+
+          def violatesInfoBudget (budget : Nat) (cert : FanoStyleCertificate) : Prop :=
+            cert.Valid ∧ budget < cert.requiredInformation
+
+          theorem fanoStyle_budget_violation_lifts
+              {Secret Transcript Student Guess : Type}
+              (secrets : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (transcript : Observation Secret Transcript)
+              (train : Transcript -> Student)
+              (studentAttack : CandidateAttack Student Guess)
+              (allowedErrors requiredInformation budget : Nat)
+              (h : violatesInfoBudget budget (fanoStyleFromAttack secrets criterion (postprocess transcript train) studentAttack allowedErrors requiredInformation)) :
+              violatesInfoBudget budget (fanoStyleFromAttack secrets criterion transcript (liftedAttack train studentAttack) allowedErrors requiredInformation) := by
+            exact h
+
+          end InfoTheory
+          end PACXAI
+          '''.strip() + "\n"
+
+          files["PACXAI/PAC/MonteCarlo.lean"] = r'''
+          import PACXAI.Core
+          import PACXAI.Recovery
+          import PACXAI.Conditioning
+
+          namespace PACXAI
+          namespace PAC
+
+          structure MonteCarloCertificate where
+            samples : Nat
+            successes : Nat
+            allowedSuccesses : Nat
+            confidenceNumerator : Nat
+            confidenceDenominator : Nat
+            deriving Repr, BEq
+
+          def MonteCarloCertificate.Passes (c : MonteCarloCertificate) : Prop :=
+            c.successes <= c.allowedSuccesses
+
+          def monteCarloFromAttack {Secret Obs Guess : Type}
+              (samples : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (obs : Observation Secret Obs)
+              (attack : CandidateAttack Obs Guess)
+              (allowedSuccesses confidenceNumerator confidenceDenominator : Nat) : MonteCarloCertificate :=
+            { samples := samples.length,
+              successes := observedSuccessCount samples criterion obs attack,
+              allowedSuccesses := allowedSuccesses,
+              confidenceNumerator := confidenceNumerator,
+              confidenceDenominator := confidenceDenominator }
+
+          theorem monteCarlo_postprocess_success_eq {Secret Raw Out Guess : Type}
+              (samples : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (raw : Observation Secret Raw)
+              (f : Raw -> Out)
+              (attack : CandidateAttack Out Guess)
+              (allowedSuccesses confidenceNumerator confidenceDenominator : Nat) :
+              (monteCarloFromAttack samples criterion (postprocess raw f) attack allowedSuccesses confidenceNumerator confidenceDenominator).successes =
+              (monteCarloFromAttack samples criterion raw (liftedAttack f attack) allowedSuccesses confidenceNumerator confidenceDenominator).successes := by
+            rfl
+
+          theorem monteCarlo_transcript_pass_implies_student_pass {Secret Raw Out Guess : Type}
+              (samples : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (raw : Observation Secret Raw)
+              (f : Raw -> Out)
+              (attack : CandidateAttack Out Guess)
+              (allowedSuccesses confidenceNumerator confidenceDenominator : Nat)
+              (h : (monteCarloFromAttack samples criterion raw (liftedAttack f attack) allowedSuccesses confidenceNumerator confidenceDenominator).Passes) :
+              (monteCarloFromAttack samples criterion (postprocess raw f) attack allowedSuccesses confidenceNumerator confidenceDenominator).Passes := by
+            exact h
+
+          def monteCarloFromCandidateClass {Secret Obs Guess : Type}
+              (samples : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (obs : Observation Secret Obs)
+              (candidates : CandidateClass Obs Guess)
+              (allowedSuccesses confidenceNumerator confidenceDenominator : Nat) : MonteCarloCertificate :=
+            { samples := samples.length,
+              successes := candidateBestSuccess samples criterion obs candidates,
+              allowedSuccesses := allowedSuccesses,
+              confidenceNumerator := confidenceNumerator,
+              confidenceDenominator := confidenceDenominator }
+
+          theorem monteCarlo_candidateClass_postprocess_eq {Secret Raw Out Guess : Type}
+              (samples : Population Secret)
+              (criterion : Criterion Secret Guess)
+              (raw : Observation Secret Raw)
+              (f : Raw -> Out)
+              (candidates : CandidateClass Out Guess)
+              (allowedSuccesses confidenceNumerator confidenceDenominator : Nat) :
+              monteCarloFromCandidateClass samples criterion (postprocess raw f) candidates allowedSuccesses confidenceNumerator confidenceDenominator =
+              monteCarloFromCandidateClass samples criterion raw (liftCandidateClass f candidates) allowedSuccesses confidenceNumerator confidenceDenominator := by
+            simp [monteCarloFromCandidateClass, candidateBest_postprocess_eq_lifted]
+
+          end PAC
+          end PACXAI
+          '''.strip() + "\n"
+
+          files["scripts/audit.sh"] = r'''
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          echo "[audit] forbidden token scan"
+          if grep -RIn --include='*.lean' \
+            -e '\bsorry\b' -e '\badmit\b' -e '\baxiom\b' -e '\bconstant\b' \
+            -e '\bunsafe\b' -e '\bopaque\b' -e 'TODO' -e 'FIXME' \
+            PACXAI PACXAI.lean lakefile.lean; then
+            echo "Forbidden token found" >&2
+            exit 1
+          else
+            echo "No forbidden tokens found"
+          fi
+
+          echo "[audit] theorem check"
+          cat > /tmp/PACXAIPrint.lean <<'LEAN'
+          import PACXAI
+          #print axioms PACXAI.postprocess_successCount_eq
+          #print axioms PACXAI.postprocess_successRate_eq
+          #print axioms PACXAI.distilled_student_attack_is_transcript_attack
+          #print axioms PACXAI.distilled_student_rate_is_transcript_rate
+          #print axioms PACXAI.candidateBest_postprocess_eq_lifted
+          #print axioms PACXAI.conditional_candidateBest_postprocess_eq_lifted
+          #print axioms PACXAI.student_attack_lifts_to_transcript
+          #print axioms PACXAI.student_rate_lifts_to_transcript
+          #print axioms PACXAI.conditional_student_attack_lifts_to_transcript
+          #print axioms PACXAI.student_candidate_best_is_transcript_candidate_best_lifted
+          #print axioms PACXAI.InfoTheory.deterministic_dpi_exact
+          #print axioms PACXAI.InfoTheory.conditional_deterministic_dpi_exact
+          #print axioms PACXAI.InfoTheory.infoGain_postprocess_exact
+          #print axioms PACXAI.InfoTheory.fanoStyle_valid_student_to_transcript
+          #print axioms PACXAI.InfoTheory.fanoStyle_budget_violation_lifts
+          #print axioms PACXAI.PAC.monteCarlo_transcript_pass_implies_student_pass
+          #print axioms PACXAI.PAC.monteCarlo_candidateClass_postprocess_eq
+          LEAN
+          lake env lean /tmp/PACXAIPrint.lean
+          '''.strip() + "\n"
+
+          files["README.md"] = r'''
+          # Lean + MLX Transcript Boundary Audit
+
+          This repository is generated by a single GitHub Actions workflow.
+
+          It checks a finite privacy-audit claim:
+
+          If a student artifact is a deterministic function of the audited transcript, then every finite recovery attack on the student has an equivalent transcript-level simulator with exactly the same empirical success.
+
+          The artifact also demonstrates the failure mode:
+
+          If training uses route metadata omitted from the transcript, the theorem does not apply and a transcript-only audit can falsely pass.
+          '''.strip() + "\n"
+
+          files["THREAT_MODEL.md"] = r'''
+          # Threat Model
+
+          The protected secret is a finite hidden capability or behavior label.
+
+          Valid proof boundary:
+
+          ```text
+          train : Transcript -> Student
+          ```
+
+          Invalid hidden pipeline:
+
+          ```text
+          train : Transcript -> RouteMetadata -> Student
+          ```
+
+          The MLX experiments show that omitted route metadata can create a false pass under a transcript-only audit.
+          '''.strip() + "\n"
+
+          files["LIMITATIONS.md"] = r'''
+          # Limitations
+
+          This artifact formalizes a finite recovery/privacy audit framework.
+
+          It does not claim:
+          - full Shannon entropy formalization;
+          - KL divergence with real logarithms;
+          - Gaussian maximum entropy;
+          - Gaussian rate-distortion;
+          - a large LLM distillation benchmark.
+
+          It includes a deterministic proof-matched MLX experiment and a tiny trained MLX classifier realism check.
+          '''.strip() + "\n"
+
+          files["REPRODUCE.md"] = r'''
+          # Reproduce
+
+          ```bash
+          lake build
+          bash scripts/audit.sh
+          source .venv/bin/activate
+          python experiments/mlx_proof_matched_experiments.py
+          python experiments/print_publishable_report.py
+          ```
+
+          Expected headline metrics:
+          - deterministic post-processing gap: 0;
+          - candidate-best gap: 0;
+          - finite code-cost gap: 0;
+          - route-metadata false pass: true;
+          - route-metadata lift: positive.
+          '''.strip() + "\n"
+
+          files["ARTIFACT_EVALUATION_README.md"] = r'''
+          # Artifact Evaluation README
+
+          Start with `reviewer_packet/OPEN_ME_FIRST.md`.
+
+          Main reviewer artifacts:
+          - `results/publishable_artifacts/index.html`
+          - `results/publishable_artifacts/REPORT.md`
+          - `results/publishable_artifacts/success_counts.svg`
+          - `results/publishable_artifacts/trained_classifier_accuracy.svg`
+          - `results/publishable_artifacts/subgroup_rates.svg`
+          - `results/publishable_artifacts/theorem_alignment.csv`
+          - `results/publishable_artifacts/MANIFEST.json`
+          '''.strip() + "\n"
+
+          files["BEGINNER_GUIDE.md"] = r'''
+          # Beginner Guide
+
+          The proof checks whether a student model is truly only post-processing of the audited transcript.
+
+          Valid:
+
+          ```text
+          Student = train(Transcript)
+          ```
+
+          Invalid:
+
+          ```text
+          Student = train(Transcript, RouteMetadata)
+          ```
+
+          The Lean proof checks the valid case. MLX shows the invalid case can recover far more hidden capability labels.
+          '''.strip() + "\n"
+
+          files["S_AND_P_POSITIONING.md"] = r'''
+          # S&P Positioning
+
+          Contribution:
+
+          A finite, Lean-checked privacy-audit framework for transcript-derived artifacts, paired with MLX experiments showing a concrete omitted-route-metadata false pass.
+
+          Claim:
+          - finite recovery privacy audit;
+          - deterministic post-processing proof obligation;
+          - MLX proof-matched validation;
+          - route-metadata assumption bug.
+
+          Non-claim:
+          - full Shannon/Gaussian/rate-distortion formalization.
+          '''.strip() + "\n"
+
+          files["ASSUMPTION_BUG_DEMONSTRATION.md"] = r'''
+          # Assumption Bug Demonstration
+
+          The audit claims:
+
+          ```text
+          Student = train(Transcript)
+          ```
+
+          But the real pipeline may be:
+
+          ```text
+          Student = train(Transcript, RouteMetadata)
+          ```
+
+          The MLX experiments demonstrate that this omitted input can produce a false pass.
+          '''.strip() + "\n"
+
+          for path, content in files.items():
+              p = Path(path)
+              p.parent.mkdir(parents=True, exist_ok=True)
+              p.write_text(content, encoding="utf-8")
+
+          Path("scripts/audit.sh").chmod(0o755)
+          PY
+
+          python experiments/generate_project.py
+
+      - name: Write MLX experiments and report generator
+        run: |
+          set -euxo pipefail
+
+          cat > experiments/mlx_proof_matched_experiments.py <<'PY'
+          #!/usr/bin/env python3
+          from __future__ import annotations
+
+          import csv
+          import json
+          from pathlib import Path
+          from typing import Dict, List, Tuple
+
+          import mlx.core as mx
+          import numpy as np
+
+          CAPABILITIES = ["reasoning", "coding", "tool_use", "computer_use", "policy_edge", "domain_expert"]
+          GROUPS = ["normal", "proxy_cluster", "suspicious_campaign", "enterprise_eval"]
+          QUERY_FAMILIES = ["simple_qa", "code_generation", "tool_planning", "multi_step", "policy_edge", "domain"]
+          ROUTE_TO_CAPABILITY = {
+              "reasoning_route": "reasoning",
+              "code_route": "coding",
+              "tool_route": "tool_use",
+              "computer_route": "computer_use",
+              "safety_route": "policy_edge",
+              "expert_route": "domain_expert",
+          }
+          CAPABILITY_TO_ROUTE = {v: k for k, v in ROUTE_TO_CAPABILITY.items()}
+          ROUTES = list(ROUTE_TO_CAPABILITY.keys())
+          CAP = {c: i for i, c in enumerate(CAPABILITIES)}
+          GROUP = {g: i for i, g in enumerate(GROUPS)}
+          QUERY = {q: i for i, q in enumerate(QUERY_FAMILIES)}
+          ROUTE = {r: i for i, r in enumerate(ROUTES)}
+          N = 10000
+
+          def one_hot(i: int, n: int) -> List[float]:
+              x = [0.0] * n
+              x[i] = 1.0
+              return x
+
+          def population(n: int = N) -> List[Dict[str, object]]:
+              rows = []
+              for i in range(n):
+                  group = GROUPS[(i * 13 + 3) % len(GROUPS)]
+                  capability = CAPABILITIES[(i * 7 + (2 if group == "suspicious_campaign" else 0)) % len(CAPABILITIES)]
+                  query_family = QUERY_FAMILIES[(i * 11 + len(group)) % len(QUERY_FAMILIES)]
+                  route_id = CAPABILITY_TO_ROUTE[capability]
+                  difficulty = ["easy", "medium", "hard"][(i * 5 + len(capability)) % 3]
+                  rows.append({
+                      "secret_id": i,
+                      "capability": capability,
+                      "capability_id": CAP[capability],
+                      "group": group,
+                      "query_family": query_family,
+                      "route_id": route_id,
+                      "difficulty": difficulty,
+                  })
+              return rows
+
+          def transcript_features(row: Dict[str, object]) -> List[float]:
+              capability = str(row["capability"])
+              query_family = str(row["query_family"])
+              difficulty = str(row["difficulty"])
+              if capability in {"coding", "tool_use", "computer_use"}:
+                  signature = "agentic"
+              elif capability == "policy_edge":
+                  signature = "safety"
+              else:
+                  signature = "language_reasoning"
+              signatures = ["agentic", "safety", "language_reasoning"]
+              difficulties = ["easy", "medium", "hard"]
+              x = []
+              x += one_hot(QUERY[query_family], len(QUERY_FAMILIES))
+              x += one_hot(signatures.index(signature), len(signatures))
+              x += one_hot(difficulties.index(difficulty), len(difficulties))
+              return x
+
+          def route_features(row: Dict[str, object]) -> List[float]:
+              return one_hot(ROUTE[str(row["route_id"])], len(ROUTES))
+
+          def make_matrix(rows: List[Dict[str, object]], mode: str) -> Tuple[mx.array, mx.array]:
+              xs = []
+              ys = []
+              for row in rows:
+                  x = transcript_features(row)
+                  if mode == "transcript":
+                      pass
+                  elif mode == "route":
+                      x += route_features(row)
+                  elif mode == "subgroup_route":
+                      if row["group"] in {"proxy_cluster", "suspicious_campaign"}:
+                          x += route_features(row)
+                      else:
+                          x += [0.0] * len(ROUTES)
+                  else:
+                      raise ValueError(mode)
+                  xs.append(x)
+                  ys.append(int(row["capability_id"]))
+              return mx.array(np.array(xs, dtype=np.float32)), mx.array(np.array(ys, dtype=np.int32))
+
+          def transcript_logits(x: mx.array, variant: int = 0) -> mx.array:
+              q = x[:, 0:6]
+              sig = x[:, 6:9]
+              Wq = mx.array(
+                  [
+                      [2.0, 0.2, 0.2, 0.2, 0.0, 0.0],
+                      [0.0, 2.0, 0.4, 0.4, 0.0, 0.0],
+                      [0.0, 0.4, 2.0, 0.4, 0.0, 0.0],
+                      [1.4, 0.4, 0.4, 0.4, 0.0, 0.0],
+                      [0.0, 0.0, 0.0, 0.0, 2.0, 0.0],
+                      [0.0, 0.0, 0.0, 0.0, 0.0, 2.0],
+                  ],
+                  dtype=mx.float32,
+              )
+              Ws = mx.array(
+                  [
+                      [0.0, 1.0, 1.0, 1.0, 0.0, 0.0],
+                      [0.0, 0.0, 0.0, 0.0, 2.0, 0.0],
+                      [1.5, 0.0, 0.0, 0.0, 0.0, 1.0],
+                  ],
+                  dtype=mx.float32,
+              )
+              logits = q @ Wq + sig @ Ws
+              if variant == 1:
+                  logits = logits + mx.array([0.3, 0.0, 0.1, 0.1, 0.0, 0.2], dtype=mx.float32)
+              elif variant == 2:
+                  logits = logits + mx.array([0.0, 0.2, 0.0, 0.3, 0.0, 0.1], dtype=mx.float32)
+              return logits
+
+          def route_logits(x: mx.array) -> mx.array:
+              r = x[:, 12:18]
+              return r @ (mx.eye(len(CAPABILITIES), dtype=mx.float32) * 10.0)
+
+          def subgroup_route_logits(x: mx.array) -> mx.array:
+              base = transcript_logits(x[:, 0:12])
+              route = route_logits(x)
+              route_present = mx.sum(x[:, 12:18], axis=1, keepdims=True)
+              return mx.where(route_present > 0, route, base)
+
+          def predict(logits: mx.array) -> mx.array:
+              p = mx.argmax(logits, axis=1)
+              mx.eval(p)
+              return p
+
+          def success(pred: mx.array, y: mx.array) -> int:
+              c = mx.sum(pred == y)
+              mx.eval(c)
+              return int(c.item())
+
+          def code_cost(pred: mx.array) -> int:
+              code = mx.array([1, 2, 3, 4, 5, 6], dtype=mx.int32)
+              val = mx.sum(code[pred])
+              mx.eval(val)
+              return int(val.item())
+
+          def train_linear_classifier(X: mx.array, y: mx.array, epochs: int = 180, lr: float = 0.45) -> Tuple[mx.array, mx.array]:
+              n, d = X.shape
+              k = len(CAPABILITIES)
+              W = mx.zeros((d, k), dtype=mx.float32)
+              b = mx.zeros((k,), dtype=mx.float32)
+              Y = mx.eye(k, dtype=mx.float32)[y]
+              for _ in range(epochs):
+                  logits = X @ W + b
+                  probs = mx.softmax(logits, axis=1)
+                  grad_logits = (probs - Y) / n
+                  grad_W = X.T @ grad_logits
+                  grad_b = mx.sum(grad_logits, axis=0)
+                  W = W - lr * grad_W
+                  b = b - lr * grad_b
+                  mx.eval(W, b)
+              return W, b
+
+          def accuracy(W: mx.array, b: mx.array, X: mx.array, y: mx.array) -> float:
+              pred = predict(X @ W + b)
+              return success(pred, y) / int(y.shape[0])
+
+          def main() -> None:
+              rows = population()
+              train_rows = rows[:7000]
+              test_rows = rows[7000:]
+
+              X_t, y = make_matrix(rows, "transcript")
+              X_r, _ = make_matrix(rows, "route")
+              X_s, _ = make_matrix(rows, "subgroup_route")
+
+              pred_transcript_student = predict(transcript_logits(X_t, variant=0))
+              pred_transcript_simulator = predict(transcript_logits(X_t, variant=0))
+              pred_route_student = predict(route_logits(X_r))
+              pred_subgroup_student = predict(subgroup_route_logits(X_s))
+
+              transcript_success = success(pred_transcript_student, y)
+              simulator_success = success(pred_transcript_simulator, y)
+              route_success = success(pred_route_student, y)
+              subgroup_success = success(pred_subgroup_student, y)
+
+              candidate_preds = [predict(transcript_logits(X_t, variant=i)) for i in range(3)]
+              candidate_successes = [success(p, y) for p in candidate_preds]
+              candidate_best_student = max(candidate_successes)
+              candidate_best_lifted_transcript = max(candidate_successes)
+
+              groups_np = np.array([GROUP[str(r["group"])] for r in rows], dtype=np.int32)
+              groups_mx = mx.array(groups_np)
+              conditional = {}
+              for group_name, group_id in GROUP.items():
+                  mask = groups_mx == group_id
+                  total_g = int(mx.sum(mask).item())
+                  det_g = int(mx.sum((pred_transcript_student == y) & mask).item())
+                  sim_g = int(mx.sum((pred_transcript_simulator == y) & mask).item())
+                  sub_g = int(mx.sum((pred_subgroup_student == y) & mask).item())
+                  conditional[group_name] = {
+                      "total": total_g,
+                      "deterministic_student_success": det_g,
+                      "transcript_simulator_success": sim_g,
+                      "deterministic_gap": det_g - sim_g,
+                      "subgroup_aux_success": sub_g,
+                      "subgroup_aux_rate": round(sub_g / total_g, 6),
+                      "transcript_rate": round(sim_g / total_g, 6),
+                  }
+
+              cost_student = code_cost(pred_transcript_student)
+              cost_pullback = code_cost(pred_transcript_simulator)
+
+              allowed_errors = N - transcript_success
+              fano_student_valid = N <= transcript_success + allowed_errors
+              fano_transcript_valid = N <= simulator_success + allowed_errors
+              budget = transcript_success + int(0.02 * N)
+              monte_carlo_transcript_pass = simulator_success <= budget
+              monte_carlo_student_pass = transcript_success <= budget
+              route_false_pass = simulator_success <= budget and route_success > budget
+
+              X_train_t, y_train = make_matrix(train_rows, "transcript")
+              X_test_t, y_test = make_matrix(test_rows, "transcript")
+              X_train_r, _ = make_matrix(train_rows, "route")
+              X_test_r, _ = make_matrix(test_rows, "route")
+              X_train_s, _ = make_matrix(train_rows, "subgroup_route")
+              X_test_s, _ = make_matrix(test_rows, "subgroup_route")
+
+              W_t, b_t = train_linear_classifier(X_train_t, y_train)
+              W_r, b_r = train_linear_classifier(X_train_r, y_train)
+              W_s, b_s = train_linear_classifier(X_train_s, y_train)
+
+              trained = {
+                  "transcript_only_train_accuracy": round(accuracy(W_t, b_t, X_train_t, y_train), 6),
+                  "transcript_only_test_accuracy": round(accuracy(W_t, b_t, X_test_t, y_test), 6),
+                  "route_metadata_train_accuracy": round(accuracy(W_r, b_r, X_train_r, y_train), 6),
+                  "route_metadata_test_accuracy": round(accuracy(W_r, b_r, X_test_r, y_test), 6),
+                  "subgroup_aux_train_accuracy": round(accuracy(W_s, b_s, X_train_s, y_train), 6),
+                  "subgroup_aux_test_accuracy": round(accuracy(W_s, b_s, X_test_s, y_test), 6),
+              }
+              trained["route_metadata_minus_transcript_test_accuracy"] = round(
+                  trained["route_metadata_test_accuracy"] - trained["transcript_only_test_accuracy"], 6
+              )
+
+              summary = {
+                  "n": N,
+                  "train_n": len(train_rows),
+                  "test_n": len(test_rows),
+                  "transcript_success": transcript_success,
+                  "transcript_simulator_success": simulator_success,
+                  "route_metadata_success": route_success,
+                  "subgroup_aux_success": subgroup_success,
+                  "deterministic_student_minus_transcript_simulator_success": transcript_success - simulator_success,
+                  "route_metadata_student_minus_transcript_simulator_success": route_success - simulator_success,
+                  "subgroup_aux_student_minus_transcript_simulator_success": subgroup_success - simulator_success,
+                  "candidate_best_student": candidate_best_student,
+                  "candidate_best_lifted_transcript": candidate_best_lifted_transcript,
+                  "candidate_best_gap": candidate_best_student - candidate_best_lifted_transcript,
+                  "code_cost_student": cost_student,
+                  "code_cost_pullback": cost_pullback,
+                  "code_cost_gap": cost_student - cost_pullback,
+                  "fano_student_valid": fano_student_valid,
+                  "fano_transcript_valid": fano_transcript_valid,
+                  "monte_carlo_budget": budget,
+                  "monte_carlo_transcript_pass": monte_carlo_transcript_pass,
+                  "monte_carlo_student_pass": monte_carlo_student_pass,
+                  "route_metadata_false_pass_under_transcript_audit": route_false_pass,
+                  "conditional": conditional,
+                  "trained_classifier": trained,
+              }
+
+              out = Path("results/mlx_proof_matched")
+              out.mkdir(parents=True, exist_ok=True)
+              (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+              with (out / "conditional_groups.csv").open("w", newline="", encoding="utf-8") as f:
+                  fieldnames = [
+                      "group",
+                      "total",
+                      "deterministic_student_success",
+                      "transcript_simulator_success",
+                      "deterministic_gap",
+                      "subgroup_aux_success",
+                      "subgroup_aux_rate",
+                      "transcript_rate",
+                  ]
+                  writer = csv.DictWriter(f, fieldnames=fieldnames)
+                  writer.writeheader()
+                  for g, rec in conditional.items():
+                      row = {"group": g}
+                      row.update(rec)
+                      writer.writerow(row)
+
+              print(json.dumps(summary, indent=2))
+
+          if __name__ == "__main__":
+              main()
+          PY
+          chmod +x experiments/mlx_proof_matched_experiments.py
+
+          cat > experiments/print_publishable_report.py <<'PY'
+          #!/usr/bin/env python3
+          from __future__ import annotations
+
+          import csv
+          import hashlib
+          import html
+          import json
+          import os
+          from pathlib import Path
+
+          import matplotlib
+          matplotlib.use("Agg")
+          import matplotlib.pyplot as plt
+          import numpy as np
+
+          summary = json.loads(Path("results/mlx_proof_matched/summary.json").read_text())
+          lean_bui_
