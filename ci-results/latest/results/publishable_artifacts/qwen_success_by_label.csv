@@ -1,0 +1,7 @@
+gold_label,transcript_only,transcript_plus_route_metadata
+coding,0,0
+computer_use,0,0
+domain_expert,0,1
+policy_edge,0,0
+reasoning,2,2
+tool_use,0,1

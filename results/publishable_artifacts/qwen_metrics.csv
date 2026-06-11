@@ -1,0 +1,7 @@
+Metric,Value,Interpretation
+Model,mlx-community/Qwen2.5-0.5B-Instruct-4bit,Real Qwen model used through mlx-lm.
+Cases,12,Finite audit population.
+Transcript-only success,2,Recovery with audited transcript only.
+Transcript+route success,4,Recovery when omitted route metadata is available.
+Route metadata lift,2,Additional recoveries caused by omitted route metadata.
+False pass,True,Transcript-only boundary would certify the wrong pipeline.

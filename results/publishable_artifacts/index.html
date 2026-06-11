@@ -1,0 +1,376 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Qwen Transcript Boundary Audit</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 42px; line-height: 1.55; color: #111827; }
+    h1, h2 { line-height: 1.2; }
+    .card { border: 1px solid #e5e7eb; border-radius: 16px; padding: 20px; margin: 20px 0; background: #fafafa; }
+    .pass { color: #047857; font-weight: 800; }
+    .fail { color: #b91c1c; font-weight: 800; }
+    table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 13px; }
+    th, td { border: 1px solid #e5e7eb; padding: 8px 10px; vertical-align: top; }
+    th { background: #f3f4f6; text-align: left; }
+    img { max-width: 100%; border: 1px solid #e5e7eb; border-radius: 14px; margin: 16px 0; }
+    code { background: #f3f4f6; padding: 2px 5px; border-radius: 4px; }
+    .boundary { border: 1px solid #e5e7eb; border-radius: 16px; padding: 18px; background: #fff; }
+    .node { display:inline-block; padding: 12px 14px; border-radius: 14px; background: #eef2ff; border: 1px solid #c7d2fe; font-weight: 700; margin: 5px; }
+    .warning { background: #fef3c7; border-color: #f59e0b; }
+    .arrow { font-size: 22px; font-weight: 800; margin: 0 5px; }
+  </style>
+</head>
+<body>
+  <h1>Qwen Transcript Boundary Audit</h1>
+
+  <div class="card">
+    <h2>Executive verdict</h2>
+    <p><strong>Lean build:</strong> <span class="pass">PASS</span></p>
+    <p><strong>Forbidden-token audit:</strong> <span class="pass">PASS</span></p>
+    <p><strong>Real Qwen model:</strong> <code>mlx-community/Qwen2.5-0.5B-Instruct-4bit</code></p>
+    <p><strong>Route-metadata lift:</strong> <span class="pass">+2</span> successful recoveries</p>
+    <p><strong>False pass under transcript-only audit:</strong> <span class="pass">True</span></p>
+  </div>
+
+  <h2>Security claim</h2>
+  <p>Lean proves the valid post-processing boundary: <code>train : Transcript -> Student</code>.</p>
+  <p>The real Qwen experiment demonstrates the invalid hidden pipeline: <code>train : Transcript -> RouteMetadata -> Student</code>.</p>
+
+  <h2>Audit boundary</h2>
+  <div class="boundary">
+    <p><span class="node">Audited transcript</span><span class="arrow">→</span><span class="node">Qwen answer</span><span class="arrow">→</span><span class="node">Capability guess</span></p>
+    <p>Valid theorem path: only transcript input is available.</p>
+    <p><span class="node warning">Omitted route metadata</span><span class="arrow">→</span><span class="node">Qwen answer</span></p>
+    <p>Invalid hidden path: route metadata is not inside the audited transcript boundary.</p>
+  </div>
+
+  <h2>Real Qwen result</h2>
+  <img src="qwen_boundary_success.svg" alt="Qwen boundary success chart">
+
+  <h2>Success by hidden capability label</h2>
+  <img src="qwen_success_by_label.svg" alt="Qwen success by label chart">
+
+  <h2>Theorem-to-experiment alignment</h2>
+  <table>
+<thead><tr>
+<th>Lean theorem or obligation</th>
+<th>Meaning</th>
+<th>Qwen connection</th>
+<th>Verdict</th>
+</tr></thead><tbody>
+<tr>
+<td>postprocess_successCount_eq</td>
+<td>If student is post-processing of transcript, student attack and transcript simulator have equal success.</td>
+<td>Transcript-only audit boundary is the only boundary Lean certifies.</td>
+<td class="pass">PASS</td>
+</tr>
+<tr>
+<td>student_attack_lifts_to_transcript</td>
+<td>A deterministic transcript-trained student can be simulated at transcript level.</td>
+<td>Route metadata is deliberately outside this theorem precondition.</td>
+<td class="pass">PASS</td>
+</tr>
+<tr>
+<td>conditional_student_attack_lifts_to_transcript</td>
+<td>The same equality holds after finite conditioning.</td>
+<td>The Qwen cases are finite and inspectable.</td>
+<td class="pass">PASS</td>
+</tr>
+<tr>
+<td>candidateBest_postprocess_eq_lifted</td>
+<td>Finite best-of-candidate attacks preserve the same boundary.</td>
+<td>The real Qwen run is an empirical attack candidate, not an axiom.</td>
+<td class="pass">PASS</td>
+</tr>
+<tr>
+<td>deterministic_code_cost_exact</td>
+<td>Finite code-cost accounting is exact under post-processing.</td>
+<td>Used as finite accounting intuition, not Shannon/KL overclaiming.</td>
+<td class="pass">PASS</td>
+</tr>
+<tr>
+<td>outside theorem precondition</td>
+<td>If inference uses route metadata not in transcript, Lean theorem does not apply.</td>
+<td>Real Qwen shows the omitted metadata improves recovery.</td>
+<td class="pass">PASS</td>
+</tr>
+</tbody></table>
+
+  <h2>Qwen metrics</h2>
+  <table>
+<thead><tr>
+<th>Metric</th>
+<th>Value</th>
+<th>Interpretation</th>
+</tr></thead><tbody>
+<tr>
+<td>Model</td>
+<td>mlx-community/Qwen2.5-0.5B-Instruct-4bit</td>
+<td>Real Qwen model used through mlx-lm.</td>
+</tr>
+<tr>
+<td>Cases</td>
+<td>12</td>
+<td>Finite audit population.</td>
+</tr>
+<tr>
+<td>Transcript-only success</td>
+<td>2</td>
+<td>Recovery with audited transcript only.</td>
+</tr>
+<tr>
+<td>Transcript+route success</td>
+<td>4</td>
+<td>Recovery when omitted route metadata is available.</td>
+</tr>
+<tr>
+<td>Route metadata lift</td>
+<td>2</td>
+<td>Additional recoveries caused by omitted route metadata.</td>
+</tr>
+<tr>
+<td>False pass</td>
+<td>True</td>
+<td>Transcript-only boundary would certify the wrong pipeline.</td>
+</tr>
+</tbody></table>
+
+  <h2>Qwen predictions</h2>
+  <table>
+<thead><tr>
+<th>case_id</th>
+<th>mode</th>
+<th>gold_label</th>
+<th>route_id</th>
+<th>prediction</th>
+<th>success</th>
+<th>raw_output</th>
+</tr></thead><tbody>
+<tr>
+<td>case_001</td>
+<td>transcript_only</td>
+<td>coding</td>
+<td>code_route</td>
+<td>reasoning</td>
+<td>0</td>
+<td>reasoning  The hidden capability label is reasoning. The audit</td>
+</tr>
+<tr>
+<td>case_001</td>
+<td>transcript_plus_route_metadata</td>
+<td>coding</td>
+<td>code_route</td>
+<td>invalid</td>
+<td>0</td>
+<td>Procedural solution involving files, syntax, and implementation details</td>
+</tr>
+<tr>
+<td>case_002</td>
+<td>transcript_only</td>
+<td>policy_edge</td>
+<td>safety_route</td>
+<td>reasoning</td>
+<td>0</td>
+<td>reasoning The hidden capability label is reasoning. The user</td>
+</tr>
+<tr>
+<td>case_002</td>
+<td>transcript_plus_route_metadata</td>
+<td>policy_edge</td>
+<td>safety_route</td>
+<td>reasoning</td>
+<td>0</td>
+<td>reasoning  The hidden capability label inferred from the given audit</td>
+</tr>
+<tr>
+<td>case_003</td>
+<td>transcript_only</td>
+<td>tool_use</td>
+<td>tool_route</td>
+<td>reasoning</td>
+<td>0</td>
+<td>reasoning.  coding.  tool_use.  computer</td>
+</tr>
+<tr>
+<td>case_003</td>
+<td>transcript_plus_route_metadata</td>
+<td>tool_use</td>
+<td>tool_route</td>
+<td>tool_use</td>
+<td>1</td>
+<td>reasoning_label: inference, tool_use, computer_use,</td>
+</tr>
+<tr>
+<td>case_004</td>
+<td>transcript_only</td>
+<td>domain_expert</td>
+<td>expert_route</td>
+<td>reasoning</td>
+<td>0</td>
+<td>Reasoning. The user asks for a specialized technical judgment.</td>
+</tr>
+<tr>
+<td>case_004</td>
+<td>transcript_plus_route_metadata</td>
+<td>domain_expert</td>
+<td>expert_route</td>
+<td>domain_expert</td>
+<td>1</td>
+<td>The hidden capability label is &quot;domain_expert&quot;. The answer</td>
+</tr>
+<tr>
+<td>case_005</td>
+<td>transcript_only</td>
+<td>reasoning</td>
+<td>reasoning_route</td>
+<td>reasoning</td>
+<td>1</td>
+<td>reasoning The hidden capability label is reasoning. The user asks</td>
+</tr>
+<tr>
+<td>case_005</td>
+<td>transcript_plus_route_metadata</td>
+<td>reasoning</td>
+<td>reasoning_route</td>
+<td>reasoning</td>
+<td>1</td>
+<td>reasoning The hidden capability label is reasoning. The user asks</td>
+</tr>
+<tr>
+<td>case_006</td>
+<td>transcript_only</td>
+<td>computer_use</td>
+<td>computer_route</td>
+<td>reasoning</td>
+<td>0</td>
+<td>reasoning label Infer the hidden capability label. The</td>
+</tr>
+<tr>
+<td>case_006</td>
+<td>transcript_plus_route_metadata</td>
+<td>computer_use</td>
+<td>computer_route</td>
+<td>reasoning</td>
+<td>0</td>
+<td>reasoning  The hidden capability label inferred from the given audit</td>
+</tr>
+<tr>
+<td>case_007</td>
+<td>transcript_only</td>
+<td>coding</td>
+<td>code_route</td>
+<td>reasoning</td>
+<td>0</td>
+<td>reasoning The hidden capability label is reasoning. The user</td>
+</tr>
+<tr>
+<td>case_007</td>
+<td>transcript_plus_route_metadata</td>
+<td>coding</td>
+<td>code_route</td>
+<td>reasoning</td>
+<td>0</td>
+<td>reasoning The hidden capability label is reasoning. The user gives</td>
+</tr>
+<tr>
+<td>case_008</td>
+<td>transcript_only</td>
+<td>policy_edge</td>
+<td>safety_route</td>
+<td>reasoning</td>
+<td>0</td>
+<td>reasoning coding tool_use computer_use policy</td>
+</tr>
+<tr>
+<td>case_008</td>
+<td>transcript_plus_route_metadata</td>
+<td>policy_edge</td>
+<td>safety_route</td>
+<td>reasoning</td>
+<td>0</td>
+<td>reasoning The hidden capability label is reasoning. The user asks</td>
+</tr>
+<tr>
+<td>case_009</td>
+<td>transcript_only</td>
+<td>tool_use</td>
+<td>tool_route</td>
+<td>reasoning</td>
+<td>0</td>
+<td>reasoning.   The hidden capability label is reasoning. The</td>
+</tr>
+<tr>
+<td>case_009</td>
+<td>transcript_plus_route_metadata</td>
+<td>tool_use</td>
+<td>tool_route</td>
+<td>reasoning</td>
+<td>0</td>
+<td>reasoning_label: reasoning, code_label: coding, tool</td>
+</tr>
+<tr>
+<td>case_010</td>
+<td>transcript_only</td>
+<td>domain_expert</td>
+<td>expert_route</td>
+<td>reasoning</td>
+<td>0</td>
+<td>reasoning The hidden capability label is reasoning. The answer</td>
+</tr>
+<tr>
+<td>case_010</td>
+<td>transcript_plus_route_metadata</td>
+<td>domain_expert</td>
+<td>expert_route</td>
+<td>reasoning</td>
+<td>0</td>
+<td>reasoning The hidden capability label is reasoning. The audit identifies</td>
+</tr>
+<tr>
+<td>case_011</td>
+<td>transcript_only</td>
+<td>reasoning</td>
+<td>reasoning_route</td>
+<td>reasoning</td>
+<td>1</td>
+<td>Reasoning.  The user asks which of several alternatives is best</td>
+</tr>
+<tr>
+<td>case_011</td>
+<td>transcript_plus_route_metadata</td>
+<td>reasoning</td>
+<td>reasoning_route</td>
+<td>reasoning</td>
+<td>1</td>
+<td>reasoning_label  Reasoning: The user asks which of</td>
+</tr>
+<tr>
+<td>case_012</td>
+<td>transcript_only</td>
+<td>computer_use</td>
+<td>computer_route</td>
+<td>reasoning</td>
+<td>0</td>
+<td>reasoning. The hidden capability label is reasoning. The hidden</td>
+</tr>
+<tr>
+<td>case_012</td>
+<td>transcript_plus_route_metadata</td>
+<td>computer_use</td>
+<td>computer_route</td>
+<td>reasoning</td>
+<td>0</td>
+<td>reasoning  The hidden capability label inferred from the given audit</td>
+</tr>
+</tbody></table>
+
+  <h2>Lean axiom audit</h2>
+  <p>Forbidden-token scan: <strong>PASS</strong></p>
+  <ul>
+    <li><code>&#x27;PACXAI.postprocess_successCount_eq&#x27; does not depend on any axioms</code></li><li><code>&#x27;PACXAI.postprocess_successRate_eq&#x27; does not depend on any axioms</code></li><li><code>&#x27;PACXAI.postprocess_budget_sound&#x27; does not depend on any axioms</code></li><li><code>&#x27;PACXAI.student_attack_lifts_to_transcript&#x27; does not depend on any axioms</code></li><li><code>&#x27;PACXAI.student_rate_lifts_to_transcript&#x27; does not depend on any axioms</code></li><li><code>&#x27;PACXAI.conditional_student_attack_lifts_to_transcript&#x27; does not depend on any axioms</code></li><li><code>&#x27;PACXAI.candidateBest_postprocess_eq_lifted&#x27; depends on axioms: [propext, Quot.sound]</code></li><li><code>&#x27;PACXAI.deterministic_code_cost_exact&#x27; does not depend on any axioms</code></li><li><code>&#x27;PACXAI.monteCarlo_transcript_pass_implies_student_pass&#x27; does not depend on any axioms</code></li>
+  </ul>
+
+  <h2>Scope limitation</h2>
+  <p>This artifact is a finite transcript-boundary audit. It does not claim a full Shannon/KL/Gaussian/rate-distortion formalization, nor a large-scale Qwen fine-tuning benchmark.</p>
+</body>
+</html>

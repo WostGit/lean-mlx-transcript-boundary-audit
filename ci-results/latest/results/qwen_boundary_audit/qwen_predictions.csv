@@ -1,0 +1,25 @@
+case_id,mode,gold_label,route_id,prediction,success,raw_output
+case_001,transcript_only,coding,code_route,reasoning,0,reasoning  The hidden capability label is reasoning. The audit
+case_001,transcript_plus_route_metadata,coding,code_route,invalid,0,"Procedural solution involving files, syntax, and implementation details"
+case_002,transcript_only,policy_edge,safety_route,reasoning,0,reasoning The hidden capability label is reasoning. The user
+case_002,transcript_plus_route_metadata,policy_edge,safety_route,reasoning,0,reasoning  The hidden capability label inferred from the given audit
+case_003,transcript_only,tool_use,tool_route,reasoning,0,reasoning.  coding.  tool_use.  computer
+case_003,transcript_plus_route_metadata,tool_use,tool_route,tool_use,1,"reasoning_label: inference, tool_use, computer_use,"
+case_004,transcript_only,domain_expert,expert_route,reasoning,0,Reasoning. The user asks for a specialized technical judgment.
+case_004,transcript_plus_route_metadata,domain_expert,expert_route,domain_expert,1,"The hidden capability label is ""domain_expert"". The answer"
+case_005,transcript_only,reasoning,reasoning_route,reasoning,1,reasoning The hidden capability label is reasoning. The user asks
+case_005,transcript_plus_route_metadata,reasoning,reasoning_route,reasoning,1,reasoning The hidden capability label is reasoning. The user asks
+case_006,transcript_only,computer_use,computer_route,reasoning,0,reasoning label Infer the hidden capability label. The
+case_006,transcript_plus_route_metadata,computer_use,computer_route,reasoning,0,reasoning  The hidden capability label inferred from the given audit
+case_007,transcript_only,coding,code_route,reasoning,0,reasoning The hidden capability label is reasoning. The user
+case_007,transcript_plus_route_metadata,coding,code_route,reasoning,0,reasoning The hidden capability label is reasoning. The user gives
+case_008,transcript_only,policy_edge,safety_route,reasoning,0,reasoning coding tool_use computer_use policy
+case_008,transcript_plus_route_metadata,policy_edge,safety_route,reasoning,0,reasoning The hidden capability label is reasoning. The user asks
+case_009,transcript_only,tool_use,tool_route,reasoning,0,reasoning.   The hidden capability label is reasoning. The
+case_009,transcript_plus_route_metadata,tool_use,tool_route,reasoning,0,"reasoning_label: reasoning, code_label: coding, tool"
+case_010,transcript_only,domain_expert,expert_route,reasoning,0,reasoning The hidden capability label is reasoning. The answer
+case_010,transcript_plus_route_metadata,domain_expert,expert_route,reasoning,0,reasoning The hidden capability label is reasoning. The audit identifies
+case_011,transcript_only,reasoning,reasoning_route,reasoning,1,Reasoning.  The user asks which of several alternatives is best
+case_011,transcript_plus_route_metadata,reasoning,reasoning_route,reasoning,1,reasoning_label  Reasoning: The user asks which of
+case_012,transcript_only,computer_use,computer_route,reasoning,0,reasoning. The hidden capability label is reasoning. The hidden
+case_012,transcript_plus_route_metadata,computer_use,computer_route,reasoning,0,reasoning  The hidden capability label inferred from the given audit

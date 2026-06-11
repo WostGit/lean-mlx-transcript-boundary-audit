@@ -1,0 +1,7 @@
+Lean theorem or obligation,Meaning,Qwen connection,Verdict
+postprocess_successCount_eq,"If student is post-processing of transcript, student attack and transcript simulator have equal success.",Transcript-only audit boundary is the only boundary Lean certifies.,PASS
+student_attack_lifts_to_transcript,A deterministic transcript-trained student can be simulated at transcript level.,Route metadata is deliberately outside this theorem precondition.,PASS
+conditional_student_attack_lifts_to_transcript,The same equality holds after finite conditioning.,The Qwen cases are finite and inspectable.,PASS
+candidateBest_postprocess_eq_lifted,Finite best-of-candidate attacks preserve the same boundary.,"The real Qwen run is an empirical attack candidate, not an axiom.",PASS
+deterministic_code_cost_exact,Finite code-cost accounting is exact under post-processing.,"Used as finite accounting intuition, not Shannon/KL overclaiming.",PASS
+outside theorem precondition,"If inference uses route metadata not in transcript, Lean theorem does not apply.",Real Qwen shows the omitted metadata improves recovery.,PASS

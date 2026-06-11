@@ -1,0 +1,11 @@
+{
+  "model": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+  "n_cases": 12,
+  "transcript_only_success": 2,
+  "transcript_plus_route_metadata_success": 4,
+  "route_metadata_lift": 2,
+  "transcript_only_accuracy": 0.166667,
+  "transcript_plus_route_metadata_accuracy": 0.333333,
+  "route_metadata_false_pass_under_transcript_audit": true,
+  "seconds": 16.144
+}
